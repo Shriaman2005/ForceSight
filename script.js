@@ -259,7 +259,7 @@ function drawArrow(context, fromX, fromY, vecX, vecY, color, label, isDashed = f
     // Label
     if (label) {
         context.font = "bold 14px 'Space Grotesk'";
-        context.fillStyle = "white"; // Or color
+        context.fillStyle = "#0f172a"; // Dark Slate
         // Offset label slightly
         context.fillText(label, toX + (vecX > 0 ? 10 : -30), toY + (vecY > 0 ? 25 : -10));
     }
@@ -351,7 +351,7 @@ function drawFBD(forces) {
     ctx.rotate(forces.theta);
 
     // Draw Surface
-    ctx.strokeStyle = "rgba(255,255,255,0.4)";
+    ctx.strokeStyle = "rgba(0,0,0,0.6)";
     ctx.lineWidth = 4;
     ctx.beginPath();
     ctx.moveTo(-150, 25); // moved down slightly
