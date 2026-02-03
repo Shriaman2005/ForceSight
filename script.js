@@ -459,5 +459,22 @@ document.getElementById('toggle-mg-btn').addEventListener('click', () => {
     }
 });
 
+const settingsBtn = document.getElementById('settings-btn');
+const controlsSection = document.querySelector('.controls-section');
+
+settingsBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    controlsSection.classList.toggle('active');
+    settingsBtn.classList.toggle('active'); // Optional: style active state of button
+});
+
+// Close when clicking outside
+document.addEventListener('click', (e) => {
+    if (!controlsSection.contains(e.target) && !settingsBtn.contains(e.target)) {
+        controlsSection.classList.remove('active');
+        settingsBtn.classList.remove('active');
+    }
+});
+
 // Init
 startCamera();

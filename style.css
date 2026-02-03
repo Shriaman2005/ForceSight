@@ -410,11 +410,30 @@ video {
 }
 
 .controls-section {
-    margin-top: auto;
-    background: rgba(0, 0, 0, 0.4);
-    padding: 1rem;
-    border-radius: 12px;
+    position: absolute;
+    bottom: 80px;
+    /* Position above controls */
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    width: 90%;
+    max-width: 300px;
+    background: var(--panel-bg);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    padding: 1.5rem;
+    border-radius: 16px;
     border: 1px solid var(--glass-border);
+    opacity: 0;
+    pointer-events: none;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 100;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+.controls-section.active {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+    pointer-events: all;
 }
 
 .controls {
@@ -422,4 +441,6 @@ video {
     justify-content: center;
     gap: 0.5rem;
     margin-top: 1rem;
+    position: relative;
+    /* context for popup if needed, but using absolute relative to panel might be better */
 }
