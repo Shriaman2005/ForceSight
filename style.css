@@ -265,6 +265,33 @@ video {
     height: 100%;
 }
 
+#no-object-message {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    color: var(--text-muted);
+    font-size: 1.2rem;
+    font-weight: 500;
+}
+
+#no-object-message i {
+    width: 48px;
+    height: 48px;
+    opacity: 0.5;
+}
+
+/* Toggle Classes */
+.hidden {
+    display: none !important;
+}
+
 .caption {
     font-size: 0.8rem;
     color: var(--text-muted);

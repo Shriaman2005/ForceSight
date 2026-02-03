@@ -301,9 +301,23 @@ function loop(timestamp) {
 
         detectionConf.innerText = "Tracking Yellow Cube";
         detectionConf.style.color = "#4ade80"; // green
-    } else {
         detectionConf.innerText = "Searching for Yellow...";
         detectionConf.style.color = "#facc15"; // yellow
+    }
+
+    // Toggle FBD Display
+    const fbdCanvas = document.getElementById('fbd-canvas');
+    const noObjectMsg = document.getElementById('no-object-message');
+    const forcesList = document.querySelector('.forces-list');
+
+    if (objectPos.detected) {
+        fbdCanvas.style.display = 'block';
+        noObjectMsg.style.display = 'none';
+        forcesList.style.display = 'flex'; // Changed from hiding to showing flex container
+    } else {
+        fbdCanvas.style.display = 'none';
+        noObjectMsg.style.display = 'flex';
+        forcesList.style.display = 'none';
     }
 
     // Updates
