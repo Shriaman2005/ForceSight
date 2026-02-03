@@ -48,6 +48,8 @@ let physics = {
     mu: 0.6 // coefficient of friction (rubber/wood)
 };
 
+let showMgComponents = true;
+
 const PIXELS_PER_NEWTON = 2; // Scale for FBD
 
 // Calibration (Target Yellow)
@@ -376,21 +378,29 @@ function drawFBD(forces) {
     // 1. Draw Real Weight Vector (slightly transparent to emphasize components)
     ctx.save();
     ctx.rotate(-forces.theta);
-    drawArrow(ctx, 0, 0, 0, forces.W * scale, "rgba(239, 68, 68, 0.5)", ""); // Helper main weight
+
+    // If components are hidden, we show the main Weight vector fully opaque and labeled.
+    // If components are shown, we keep it ghosted (transparent) and unlabeled to reduce clutter.
+    const wColor = showMgComponents ? "rgba(239, 68, 68, 0.5)" : "rgba(239, 68, 68, 1.0)";
+    const wLabel = showMgComponents ? "" : "mg";
+
+    drawArrow(ctx, 0, 0, 0, forces.W * scale, wColor, wLabel);
     ctx.restore();
 
     // 2. Weight Components
-    // mg cos(theta) -> Perpendicular into slope
-    // Direction: (0, 1) in local frame
-    // Magnitude: W * cos(theta) (which is Normal force magnitude roughly)
-    const wCos = forces.W * Math.cos(forces.theta);
-    drawArrow(ctx, 0, 0, 0, wCos * scale, "#a855f7", "mg cosθ", true);
+    if (showMgComponents) {
+        // mg cos(theta) -> Perpendicular into slope
+        // Direction: (0, 1) in local frame
+        // Magnitude: W * cos(theta) (which is Normal force magnitude roughly)
+        const wCos = forces.W * Math.cos(forces.theta);
+        drawArrow(ctx, 0, 0, 0, wCos * scale, "#a855f7", "mg cosθ", true);
 
-    // mg sin(theta) -> Parallel to slope
-    // Direction: Down the slope.
-    // If theta > 0, pulls +x.
-    const wSin = forces.W * Math.sin(forces.theta);
-    drawArrow(ctx, 0, 0, wSin * scale, 0, "#ec4899", "mg sinθ", true);
+        // mg sin(theta) -> Parallel to slope
+        // Direction: Down the slope.
+        // If theta > 0, pulls +x.
+        const wSin = forces.W * Math.sin(forces.theta);
+        drawArrow(ctx, 0, 0, wSin * scale, 0, "#ec4899", "mg sinθ", true);
+    }
 
 
     // Friction (Parallel to surface)
@@ -427,6 +437,26 @@ document.getElementById('calibrate-btn').addEventListener('click', () => {
 
     // Reset to active after short delay
     setTimeout(() => { updateStatus("Tracking Active"); }, 1500);
+});
+
+document.getElementById('export-btn').addEventListener('click', () => {
+    // Determine current angle
+    const angle = physics.detectedSlope.toFixed(0);
+    const link = document.createElement('a');
+    link.download = `FBD_Angle_${angle}.png`;
+    link.href = fbdCanvas.toDataURL('image/png');
+    link.click();
+});
+
+document.getElementById('toggle-mg-btn').addEventListener('click', () => {
+    showMgComponents = !showMgComponents;
+    // Optional: Visual feedback on button (e.g., opacity or border)
+    const btn = document.getElementById('toggle-mg-btn');
+    if (showMgComponents) {
+        btn.style.opacity = "1";
+    } else {
+        btn.style.opacity = "0.5";
+    }
 });
 
 // Init
