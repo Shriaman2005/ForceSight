@@ -163,7 +163,8 @@ body {
 
 /* Left Panel */
 .left-panel {
-    flex: 3;
+    flex: 0 0 450px;
+    /* Mobile Portrait Width Extended */
     position: relative;
     display: flex;
     flex-direction: column;
@@ -227,7 +228,7 @@ video {
 
 /* Right Panel */
 .right-panel {
-    flex: 2;
+    flex: 1;
     overflow-y: auto;
 }
 
@@ -412,5 +413,16 @@ video {
 }
 
 .controls-section {
-    display: none !important;
+    margin-top: auto;
+    background: rgba(0, 0, 0, 0.4);
+    padding: 1rem;
+    border-radius: 12px;
+    border: 1px solid var(--glass-border);
+}
+
+.controls {
+    display: flex;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-top: 1rem;
 }
