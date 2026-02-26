@@ -56,12 +56,10 @@ let physics = {
 };
 
 let showMgComponents = true;
-let showResultantOnly = false;
 
 const trackState = {
     yellow: { x: 0, y: 0, angle: 0, detected: false, area: 0 },
-    red: { x: 0, y: 0, angle: 0, detected: false, area: 0 },
-    primary: null // Tracks which block was detected first for stability
+    red: { x: 0, y: 0, angle: 0, detected: false, area: 0 }
 };
 
 // Tracking constants
@@ -117,12 +115,6 @@ function updatePhysics() {
     physics.mu = parseFloat(frictionSlider.value);
     frictionValueDisp.innerText = physics.mu.toFixed(2);
 
-    physics.mass2 = parseFloat(mass2Slider.value);
-    if (mass2ValueDisp) mass2ValueDisp.innerText = physics.mass2.toFixed(1) + " kg";
-
-    physics.mu2 = parseFloat(friction2Slider.value);
-    if (friction2ValueDisp) friction2ValueDisp.innerText = physics.mu2.toFixed(2);
-
     // Determine primary block for angle stability
     if (!trackState.primary) {
         if (trackState.yellow.detected) trackState.primary = 'yellow';
@@ -138,9 +130,9 @@ function updatePhysics() {
     }
 
     let rawAngle = 0;
-    if (trackState.primary === 'yellow') {
+    if (trackState.yellow.detected) {
         rawAngle = trackState.yellow.angle;
-    } else if (trackState.primary === 'red') {
+    } else if (trackState.red.detected) {
         rawAngle = trackState.red.angle;
     }
 
@@ -295,7 +287,6 @@ function computeBlockInteraction(forces) {
     let mode = 'angled';
     let normal = { x: dx / distance, y: dy / distance };
 
-    // Determine mode based on relative positions
     if (Math.abs(dy) > Math.abs(dx) * 1.25) {
         mode = 'stacked';
         normal = { x: 0, y: Math.sign(dy) || 1 };
@@ -315,13 +306,12 @@ function computeBlockInteraction(forces) {
         // Red is stacked on Yellow (or vice versa depending on sign, but interaction is normal to slope)
         // Normal force between them is weight component perpendicular to slope
         magnitude = upperWeight * Math.cos(forces.theta) * surfaceAlignment;
-        // Friction between blocks opposes sliding down the slope (using yellow's surface mu or red's?) Use red's as it's the upper.
-        frictionMagnitude = physics.mu2 * magnitude;
+        // Friction between blocks opposes sliding down the slope
+        frictionMagnitude = physics.mu * magnitude;
     } else if (mode === 'side') {
-        // Blocks are side-by-side on the slope
         magnitude = (slopeDrive + Math.abs(forces.f)) * surfaceAlignment;
         // Friction between them is minimal unless they are moving relative to each other vertically
-        frictionMagnitude = physics.mu2 * magnitude * 0.1; // Reduced for side contact
+        frictionMagnitude = physics.mu * magnitude * 0.1; // Reduced for side contact
     } else {
         const compressionFromGravity = Math.abs(upperWeight * normal.y);
         const compressionFromSlope = Math.abs(physics.mass2 * physics.gravity * Math.sin(forces.theta)) * Math.abs(normal.x);
@@ -378,7 +368,7 @@ function drawArrow(context, fromX, fromY, vecX, vecY, color, label, isDashed = f
     context.fill();
 
     if (label) {
-        context.font = "bold 14px ui-rounded, system-ui, sans-serif";
+        context.font = "bold 14px 'Space Grotesk'";
         context.fillStyle = "#0f172a";
         context.fillText(label, toX + (vecX >= 0 ? 10 : -34), toY + (vecY >= 0 ? 20 : -10));
     }
@@ -400,7 +390,7 @@ function drawTrackedBlock(track, color, label) {
     ctx.setLineDash([]);
     ctx.restore();
 
-    ctx.font = "bold 13px ui-rounded, system-ui, sans-serif";
+    ctx.font = "bold 13px 'Space Grotesk'";
     ctx.fillText(label, track.x + 16, track.y - 16);
 }
 
@@ -442,7 +432,7 @@ function drawAngleArc(context, x, y, radius, angle, color) {
     context.stroke();
 
     context.fillStyle = color;
-    context.font = "bold 12px ui-rounded, system-ui, sans-serif";
+    context.font = "bold 12px 'Space Grotesk'";
     const labelX = x + (radius + 15) * Math.cos(-angle / 2);
     const labelY = y + (radius + 15) * Math.sin(-angle / 2);
     context.fillText("θ", labelX, labelY);
@@ -509,23 +499,12 @@ function drawSingleFBD(forces) {
 function drawMultiBlockFBD(forces, interaction) {
     setupFBD(forces);
 
-    const cubeSize = 50;
+    const cubeSize = 46;
     const gap = 6;
 
-    // Draw main body based on primary tracked block
-    let primaryColor = "rgba(255, 215, 0, 0.9)"; // Yellow default
-    let secondaryColor = "rgba(139, 0, 0, 0.9)"; // Dark Red default
+    // Draw main Yellow body
+    drawCube(fbdCtx, 0, 0, cubeSize, "rgba(255, 215, 0, 0.9)");
 
-    // Swap appearance if Red is the primary tracked block
-    if (trackState.primary === 'red') {
-        primaryColor = "rgba(139, 0, 0, 0.9)";
-        secondaryColor = "rgba(255, 215, 0, 0.9)";
-    }
-
-    drawCube(fbdCtx, 0, 0, cubeSize, primaryColor);
-
-    // Draw Red block as a ghostly outline to show context
-    let redPos = { x: 0, y: 0 };
     if (interaction.mode === 'stacked') {
         redPos = { x: 0, y: -cubeSize - gap };
     } else if (interaction.mode === 'side') {
@@ -537,7 +516,7 @@ function drawMultiBlockFBD(forces, interaction) {
 
     fbdCtx.save();
     fbdCtx.globalAlpha = 0.4;
-    drawCube(fbdCtx, redPos.x, redPos.y, cubeSize, secondaryColor);
+    drawCube(fbdCtx, redPos.x, redPos.y, cubeSize, "rgba(239, 68, 68, 1)");
     fbdCtx.restore();
 
     drawAngleArc(fbdCtx, -135, 25, 35, forces.theta, "#64748b");
@@ -557,7 +536,7 @@ function drawMultiBlockFBD(forces, interaction) {
         }
     } else if (interaction.mode === 'side') {
         const sign = interaction.normal.x > 0 ? 1 : -1;
-        drawArrow(fbdCtx, sign * cubeSize / 2, 0, -sign * interaction.magnitude * scale, 0, "#ef4444", "R_sub");
+        drawArrow(fbdCtx, sign * cubeSize / 2, 0, -sign * interaction.magnitude * scale, 0, "#ef4444", "R_red");
     }
 
     // Ground friction
@@ -590,8 +569,8 @@ function drawResultantFBD(forces, interaction) {
     fbdCtx.save();
     fbdCtx.translate(cx, cy);
 
-    let primaryColor = trackState.primary === 'red' ? "rgba(139, 0, 0, 0.9)" : "rgba(255, 215, 0, 0.9)";
-    drawCube(fbdCtx, 0, 0, cubeSize, primaryColor);
+    const cubeSize = 50;
+    drawCube(fbdCtx, 0, 0, cubeSize, "rgba(255, 215, 0, 0.9)");
 
     // Compute Force Components in standard Math coordinates 
     let Wx = 0;
@@ -678,20 +657,20 @@ function drawResultantFBD(forces, interaction) {
     // Equations 
     fbdCtx.font = "14px ui-rounded, sans-serif";
     fbdCtx.fillStyle = "#0f172a";
-    fbdCtx.fillText(`ΣFx = ${Rx.toFixed(2)} N`, -fbdCanvas.width / 2 + 20, -fbdCanvas.height / 2 + 30);
-    fbdCtx.fillText(`ΣFy = ${Ry.toFixed(2)} N`, -fbdCanvas.width / 2 + 20, -fbdCanvas.height / 2 + 50);
+    fbdCtx.font = "bold 13px 'Space Grotesk'";
+    fbdCtx.fillText(
+        `${interaction.mode} contact | Δθ ${(interaction.angleDiff * 180 / Math.PI).toFixed(1)}°`,
+        -120,
+        -110
+    );
+    fbdCtx.restore();
 
     fbdCtx.restore();
 }
 
 function drawFBD(forces, interaction) {
-    if (showResultantOnly) {
-        drawResultantFBD(forces, interaction);
-    } else if (interaction.active) {
-        drawMultiBlockFBD(forces, interaction);
-    } else {
-        drawSingleFBD(forces);
-    }
+    if (interaction.active) drawMultiBlockFBD(forces, interaction);
+    else drawSingleFBD(forces);
 }
 
 function updateDetectionText(interaction) {
@@ -822,13 +801,6 @@ document.getElementById('toggle-mg-btn').addEventListener('click', () => {
     showMgComponents = !showMgComponents;
     const btn = document.getElementById('toggle-mg-btn');
     btn.style.opacity = showMgComponents ? "1" : "0.5";
-});
-
-document.getElementById('sigma-btn').addEventListener('click', () => {
-    showResultantOnly = !showResultantOnly;
-    const btn = document.getElementById('sigma-btn');
-    btn.style.color = showResultantOnly ? "var(--primary)" : "var(--text-main)";
-    btn.style.backgroundColor = showResultantOnly ? "rgba(99, 102, 241, 0.1)" : "";
 });
 
 const settingsBtn = document.getElementById('settings-btn');

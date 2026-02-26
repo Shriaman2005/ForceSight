@@ -24,7 +24,7 @@ body {
         radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.1) 0%, transparent 40%),
         radial-gradient(circle at 90% 80%, rgba(139, 92, 246, 0.1) 0%, transparent 40%);
     color: var(--text-main);
-    font-family: system-ui, -apple-system, sans-serif;
+    font-family: 'Outfit', sans-serif;
     height: 100vh;
     overflow: hidden;
     display: flex;
@@ -71,7 +71,7 @@ body {
 }
 
 .logo h1 {
-    font-family: ui-rounded, system-ui, sans-serif;
+    font-family: 'Space Grotesk', sans-serif;
     font-size: 1.5rem;
     font-weight: 700;
     letter-spacing: -0.02em;
@@ -135,7 +135,7 @@ body {
 }
 
 .panel-header h2 {
-    font-family: ui-rounded, system-ui, sans-serif;
+    font-family: 'Space Grotesk', sans-serif;
     font-size: 1.1rem;
     font-weight: 500;
     display: flex;
@@ -218,7 +218,7 @@ video {
 }
 
 .stat-item .value {
-    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-family: 'Space Grotesk', monospace;
     font-size: 1.2rem;
     font-weight: 700;
 }
@@ -242,7 +242,7 @@ video {
 
 .fbd-container h3,
 .controls-section h3 {
-    font-family: ui-rounded, system-ui, sans-serif;
+    font-family: 'Space Grotesk', sans-serif;
     font-size: 0.9rem;
     color: var(--text-muted);
     text-transform: uppercase;
@@ -366,7 +366,7 @@ video {
 }
 
 .force-value {
-    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-family: 'Space Grotesk', monospace;
     font-weight: 700;
 }
 
@@ -432,7 +432,7 @@ video {
 .slider-value {
     align-self: flex-end;
     font-size: 0.85rem;
-    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-family: 'Space Grotesk', monospace;
     color: var(--primary);
 }
 
