@@ -493,8 +493,8 @@ function drawMultiBlockFBD(forces, interaction) {
     const rx = interaction.normal.x * interaction.magnitude * reactionScale;
     const ry = interaction.normal.y * interaction.magnitude * reactionScale;
 
-    drawArrow(fbdCtx, yellowPos.x, yellowPos.y, -rx, -ry, "#22c55e", "R_y");
-    drawArrow(fbdCtx, redPos.x, redPos.y, rx, ry, "#0ea5e9", "R_r");
+    drawArrow(fbdCtx, yellowPos.x, yellowPos.y, -rx, -ry, "#22c55e", "F cosθ");
+    drawArrow(fbdCtx, redPos.x, redPos.y, rx, ry, "#0ea5e9", "F sinθ");
 
     // Add inter-block friction (opposing relative motion)
     if (interaction.frictionMagnitude > 0.5) {
