@@ -49,10 +49,12 @@ let physics = {
 };
 
 let showMgComponents = true;
+let showResultantOnly = false;
 
 const trackState = {
     yellow: { x: 0, y: 0, angle: 0, detected: false, area: 0 },
-    red: { x: 0, y: 0, angle: 0, detected: false, area: 0 }
+    red: { x: 0, y: 0, angle: 0, detected: false, area: 0 },
+    primary: null // Tracks which block was detected first for stability
 };
 
 // Tracking constants
@@ -108,10 +110,24 @@ function updatePhysics() {
     physics.mu = parseFloat(frictionSlider.value);
     frictionValueDisp.innerText = physics.mu.toFixed(2);
 
+    // Determine primary block for angle stability
+    if (!trackState.primary) {
+        if (trackState.yellow.detected) trackState.primary = 'yellow';
+        else if (trackState.red.detected) trackState.primary = 'red';
+    } else {
+        if (trackState.primary === 'yellow' && !trackState.yellow.detected && trackState.red.detected) {
+            trackState.primary = 'red';
+        } else if (trackState.primary === 'red' && !trackState.red.detected && trackState.yellow.detected) {
+            trackState.primary = 'yellow';
+        } else if (!trackState.yellow.detected && !trackState.red.detected) {
+            trackState.primary = null;
+        }
+    }
+
     let rawAngle = 0;
-    if (trackState.yellow.detected) {
+    if (trackState.primary === 'yellow') {
         rawAngle = trackState.yellow.angle;
-    } else if (trackState.red.detected) {
+    } else if (trackState.primary === 'red') {
         rawAngle = trackState.red.angle;
     }
 
@@ -263,6 +279,7 @@ function computeBlockInteraction(forces) {
     let mode = 'angled';
     let normal = { x: dx / distance, y: dy / distance };
 
+    // Determine mode based on relative positions
     if (Math.abs(dy) > Math.abs(dx) * 1.25) {
         mode = 'stacked';
         normal = { x: 0, y: Math.sign(dy) || 1 };
@@ -279,11 +296,16 @@ function computeBlockInteraction(forces) {
     let magnitude = 0;
     let frictionMagnitude = 0;
     if (mode === 'stacked') {
-        magnitude = upperWeight * surfaceAlignment;
+        // Red is stacked on Yellow (or vice versa depending on sign, but interaction is normal to slope)
+        // Normal force between them is weight component perpendicular to slope
+        magnitude = upperWeight * Math.cos(forces.theta) * surfaceAlignment;
+        // Friction between blocks opposes sliding down the slope
         frictionMagnitude = physics.mu * magnitude;
     } else if (mode === 'side') {
+        // Blocks are side-by-side on the slope
         magnitude = (slopeDrive + Math.abs(forces.f)) * surfaceAlignment;
-        frictionMagnitude = physics.mu * magnitude;
+        // Friction between them is minimal unless they are moving relative to each other vertically
+        frictionMagnitude = physics.mu * magnitude * 0.1; // Reduced for side contact
     } else {
         const compressionFromGravity = Math.abs(upperWeight * normal.y);
         const compressionFromSlope = slopeDrive * Math.abs(normal.x);
@@ -340,7 +362,7 @@ function drawArrow(context, fromX, fromY, vecX, vecY, color, label, isDashed = f
     context.fill();
 
     if (label) {
-        context.font = "bold 14px 'Space Grotesk'";
+        context.font = "bold 14px ui-rounded, system-ui, sans-serif";
         context.fillStyle = "#0f172a";
         context.fillText(label, toX + (vecX >= 0 ? 10 : -34), toY + (vecY >= 0 ? 20 : -10));
     }
@@ -362,7 +384,7 @@ function drawTrackedBlock(track, color, label) {
     ctx.setLineDash([]);
     ctx.restore();
 
-    ctx.font = "bold 13px 'Space Grotesk'";
+    ctx.font = "bold 13px ui-rounded, system-ui, sans-serif";
     ctx.fillText(label, track.x + 16, track.y - 16);
 }
 
@@ -404,7 +426,7 @@ function drawAngleArc(context, x, y, radius, angle, color) {
     context.stroke();
 
     context.fillStyle = color;
-    context.font = "bold 12px 'Space Grotesk'";
+    context.font = "bold 12px ui-rounded, system-ui, sans-serif";
     const labelX = x + (radius + 15) * Math.cos(-angle / 2);
     const labelY = y + (radius + 15) * Math.sin(-angle / 2);
     context.fillText("θ", labelX, labelY);
@@ -471,61 +493,180 @@ function drawSingleFBD(forces) {
 function drawMultiBlockFBD(forces, interaction) {
     setupFBD(forces);
 
-    const cubeSize = 46;
+    const cubeSize = 50;
     const gap = 6;
 
-    const yellowPos = { x: 0, y: 0 };
-    let redPos = { x: interaction.normal.x * (cubeSize + gap), y: interaction.normal.y * (cubeSize + gap) };
+    // Draw main Yellow body
+    drawCube(fbdCtx, 0, 0, cubeSize, "rgba(255, 215, 0, 0.9)");
 
+    // Draw Red block as a ghostly outline to show context
+    let redPos = { x: 0, y: 0 };
     if (interaction.mode === 'stacked') {
         redPos = { x: 0, y: -cubeSize - gap };
     } else if (interaction.mode === 'side') {
-        redPos = { x: (interaction.normal.x > 0 ? 1 : -1) * (cubeSize + gap), y: 0 };
-    }
-
-    drawCube(fbdCtx, yellowPos.x, yellowPos.y, cubeSize, "rgba(255, 215, 0, 0.9)");
-    drawCube(fbdCtx, redPos.x, redPos.y, cubeSize, "rgba(239, 68, 68, 0.9)");
-
-    // Draw angle theta arc
-    drawAngleArc(fbdCtx, -135, 25, 35, forces.theta, "#64748b");
-
-    const mainScale = 2.1;
-    drawArrow(fbdCtx, yellowPos.x, yellowPos.y - cubeSize / 2, 0, -forces.N * mainScale, "#06b6d4", "N");
-    drawWeightVector(fbdCtx, forces, yellowPos.x, yellowPos.y, "mg_y");
-    drawWeightVector(fbdCtx, forces, redPos.x, redPos.y, "mg_r");
-
-    const reactionScale = 2.4;
-    const rx = interaction.normal.x * interaction.magnitude * reactionScale;
-    const ry = interaction.normal.y * interaction.magnitude * reactionScale;
-
-    drawArrow(fbdCtx, yellowPos.x, yellowPos.y, -rx, -ry, "#22c55e", "F cosθ");
-    drawArrow(fbdCtx, redPos.x, redPos.y, rx, ry, "#0ea5e9", "F sinθ");
-
-    // Add inter-block friction (opposing relative motion)
-    if (interaction.frictionMagnitude > 0.5) {
-        const fScale = 2.0;
-        // Simplified direction: opposing slope component of red block
-        const fDir = (forces.theta > 0) ? -1 : 1;
-        drawArrow(fbdCtx, redPos.x, redPos.y + cubeSize / 2, fDir * interaction.frictionMagnitude * fScale, 0, "#f59e0b", "f_inter");
+        const sign = interaction.normal.x > 0 ? 1 : -1;
+        redPos = { x: sign * (cubeSize + gap), y: 0 };
+    } else {
+        redPos = { x: interaction.normal.x * (cubeSize + gap), y: interaction.normal.y * (cubeSize + gap) };
     }
 
     fbdCtx.save();
-    fbdCtx.rotate(-forces.theta);
-    fbdCtx.fillStyle = "#0f172a";
-    fbdCtx.font = "bold 13px 'Space Grotesk'";
-    fbdCtx.fillText(
-        `${interaction.mode} contact | Δθ ${(interaction.angleDiff * 180 / Math.PI).toFixed(1)}°`,
-        -120,
-        -110
-    );
+    fbdCtx.globalAlpha = 0.4;
+    drawCube(fbdCtx, redPos.x, redPos.y, cubeSize, "rgba(239, 68, 68, 1)");
     fbdCtx.restore();
+
+    drawAngleArc(fbdCtx, -135, 25, 35, forces.theta, "#64748b");
+
+    const scale = 2.1;
+
+    // Normal and Weight on Yellow
+    drawArrow(fbdCtx, 0, -cubeSize / 2, 0, -forces.N * scale, "#06b6d4", "N");
+    drawWeightVector(fbdCtx, forces, 0, 0, "mg");
+
+    // Reaction forces from Red on Yellow
+    if (interaction.mode === 'stacked') {
+        drawArrow(fbdCtx, 0, -cubeSize / 2, 0, interaction.magnitude * scale, "#ef4444", "R_red");
+        if (interaction.frictionMagnitude > 0.1) {
+            const fDir = (forces.theta > 0) ? 1 : -1;
+            drawArrow(fbdCtx, 0, -cubeSize / 2, fDir * interaction.frictionMagnitude * scale, 0, "#f59e0b", "f_red");
+        }
+    } else if (interaction.mode === 'side') {
+        const sign = interaction.normal.x > 0 ? 1 : -1;
+        drawArrow(fbdCtx, sign * cubeSize / 2, 0, -sign * interaction.magnitude * scale, 0, "#ef4444", "R_red");
+    }
+
+    // Ground friction
+    if (Math.abs(forces.f) > 0.1) {
+        const dir = (forces.theta > 0) ? -1 : 1;
+        let totalFriction = Math.abs(forces.f);
+        if (interaction.mode === 'stacked') {
+            totalFriction += interaction.frictionMagnitude;
+        }
+        drawArrow(fbdCtx, 0, cubeSize / 2, dir * totalFriction * scale, 0, "#f59e0b", "f_gnd");
+    }
+
+    fbdCtx.restore();
+}
+
+function drawResultantFBD(forces, interaction) {
+    fbdCanvas.width = fbdCanvas.clientWidth;
+    fbdCanvas.height = fbdCanvas.clientHeight;
+    const cx = fbdCanvas.width / 2;
+    const cy = fbdCanvas.height / 2;
+    fbdCtx.clearRect(0, 0, fbdCanvas.width, fbdCanvas.height);
+
+    // Coordinate grid
+    fbdCtx.strokeStyle = "rgba(0,0,0,0.1)";
+    fbdCtx.beginPath();
+    fbdCtx.moveTo(0, cy); fbdCtx.lineTo(fbdCanvas.width, cy);
+    fbdCtx.moveTo(cx, 0); fbdCtx.lineTo(cx, fbdCanvas.height);
+    fbdCtx.stroke();
+
+    fbdCtx.save();
+    fbdCtx.translate(cx, cy);
+
+    const cubeSize = 50;
+    drawCube(fbdCtx, 0, 0, cubeSize, "rgba(255, 215, 0, 0.9)");
+
+    // Compute Force Components in standard Math coordinates 
+    let Wx = 0;
+    let Wy = -forces.W;
+    let Nx = forces.N * Math.sin(forces.theta);
+    let Ny = forces.N * Math.cos(forces.theta);
+    let fx = -forces.f * Math.cos(forces.theta);
+    let fy = forces.f * Math.sin(forces.theta);
+
+    let Rx = Wx + Nx + fx;
+    let Ry = Wy + Ny + fy;
+
+    if (interaction.active) {
+        let R_red_x = 0, R_red_y = 0;
+        let R_f_red_x = 0, R_f_red_y = 0;
+
+        if (interaction.mode === 'stacked') {
+            R_red_x = interaction.magnitude * Math.cos(Math.PI * 1.5 - forces.theta);
+            R_red_y = interaction.magnitude * Math.sin(Math.PI * 1.5 - forces.theta);
+            let fDir = (forces.theta > 0) ? 1 : -1;
+            R_f_red_x = fDir * interaction.frictionMagnitude * Math.cos(-forces.theta);
+            R_f_red_y = fDir * interaction.frictionMagnitude * Math.sin(-forces.theta);
+        } else if (interaction.mode === 'side') {
+            const sign = interaction.normal.x > 0 ? -1 : 1;
+            R_red_x = sign * interaction.magnitude * Math.cos(-forces.theta);
+            R_red_y = sign * interaction.magnitude * Math.sin(-forces.theta);
+        }
+        Rx += R_red_x + R_f_red_x;
+        Ry += R_red_y + R_f_red_y;
+    }
+
+    const R_mag = Math.sqrt(Rx * Rx + Ry * Ry);
+    let R_angle = Math.atan2(Ry, Rx);
+    let R_angle_deg = R_angle * 180 / Math.PI;
+
+    const scale = 2.5;
+
+    if (R_mag > 0.1) {
+        const drawRx = Rx * scale;
+        const drawRy = -Ry * scale; // inverted Y for canvas
+
+        fbdCtx.strokeStyle = "#8b5cf6";
+        fbdCtx.fillStyle = "#8b5cf6";
+        fbdCtx.lineWidth = 4;
+        fbdCtx.lineCap = "round";
+
+        fbdCtx.beginPath();
+        fbdCtx.moveTo(0, 0);
+        fbdCtx.lineTo(drawRx, drawRy);
+        fbdCtx.stroke();
+
+        const headLen = 14;
+        const angleCanvas = Math.atan2(drawRy, drawRx);
+        fbdCtx.beginPath();
+        fbdCtx.moveTo(drawRx, drawRy);
+        fbdCtx.lineTo(drawRx - headLen * Math.cos(angleCanvas - Math.PI / 6), drawRy - headLen * Math.sin(angleCanvas - Math.PI / 6));
+        fbdCtx.lineTo(drawRx - headLen * Math.cos(angleCanvas + Math.PI / 6), drawRy - headLen * Math.sin(angleCanvas + Math.PI / 6));
+        fbdCtx.closePath();
+        fbdCtx.fill();
+
+        fbdCtx.font = "bold 16px ui-rounded, sans-serif";
+        fbdCtx.fillStyle = "#0f172a";
+        fbdCtx.fillText("R⃗ = " + R_mag.toFixed(1) + " N", drawRx + 15, drawRy);
+
+        fbdCtx.beginPath();
+        fbdCtx.strokeStyle = "#475569";
+        fbdCtx.lineWidth = 2;
+        fbdCtx.arc(0, 0, 30, 0, angleCanvas, angleCanvas < 0);
+        fbdCtx.stroke();
+
+        fbdCtx.font = "bold 13px ui-rounded, sans-serif";
+        fbdCtx.fillStyle = "#475569";
+        let displayAngle = R_angle_deg < 0 ? 360 + R_angle_deg : R_angle_deg;
+        fbdCtx.fillText(displayAngle.toFixed(1) + "°", 40, (drawRy > 0 ? 20 : -20));
+    } else {
+        fbdCtx.font = "bold 16px ui-rounded, sans-serif";
+        fbdCtx.fillStyle = "#0f172a";
+        fbdCtx.fillText("R⃗ = 0.0 N (Equilibrium)", -80, -40);
+
+        fbdCtx.fillText(`ΣFx = ${Rx.toFixed(2)} N`, -50, 40);
+        fbdCtx.fillText(`ΣFy = ${Ry.toFixed(2)} N`, -50, 60);
+    }
+
+    // Equations 
+    fbdCtx.font = "14px ui-rounded, sans-serif";
+    fbdCtx.fillStyle = "#0f172a";
+    fbdCtx.fillText(`ΣFx = ${Rx.toFixed(2)} N`, -fbdCanvas.width / 2 + 20, -fbdCanvas.height / 2 + 30);
+    fbdCtx.fillText(`ΣFy = ${Ry.toFixed(2)} N`, -fbdCanvas.width / 2 + 20, -fbdCanvas.height / 2 + 50);
 
     fbdCtx.restore();
 }
 
 function drawFBD(forces, interaction) {
-    if (interaction.active) drawMultiBlockFBD(forces, interaction);
-    else drawSingleFBD(forces);
+    if (showResultantOnly) {
+        drawResultantFBD(forces, interaction);
+    } else if (interaction.active) {
+        drawMultiBlockFBD(forces, interaction);
+    } else {
+        drawSingleFBD(forces);
+    }
 }
 
 function updateDetectionText(interaction) {
@@ -656,6 +797,13 @@ document.getElementById('toggle-mg-btn').addEventListener('click', () => {
     showMgComponents = !showMgComponents;
     const btn = document.getElementById('toggle-mg-btn');
     btn.style.opacity = showMgComponents ? "1" : "0.5";
+});
+
+document.getElementById('sigma-btn').addEventListener('click', () => {
+    showResultantOnly = !showResultantOnly;
+    const btn = document.getElementById('sigma-btn');
+    btn.style.color = showResultantOnly ? "var(--primary)" : "var(--text-main)";
+    btn.style.backgroundColor = showResultantOnly ? "rgba(99, 102, 241, 0.1)" : "";
 });
 
 const settingsBtn = document.getElementById('settings-btn');
