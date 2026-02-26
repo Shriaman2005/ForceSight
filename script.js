@@ -4,11 +4,10 @@ lucide.createIcons();
 // DOM Elements
 const video = document.getElementById('video');
 const canvas = document.getElementById('overlay');
-const ctx = canvas.getContext('2d'); // Read-only for tracking now
+const ctx = canvas.getContext('2d'); // Read-only tracking + overlay
 const fbdCanvas = document.getElementById('fbd-canvas');
 const fbdCtx = fbdCanvas.getContext('2d');
 
-const statusPill = document.getElementById('status-pill');
 const statusText = document.getElementById('status-text');
 const indicator = document.querySelector('.indicator');
 
@@ -18,43 +17,51 @@ const valWeight = document.getElementById('val-weight');
 const detectionConf = document.getElementById('detection-confidence');
 const fpsCounter = document.getElementById('fps-counter');
 
-// Sliders (Hidden logic mainly, but we can keep them as indicators or manual overrides if needed)
-// User wants dynamic, so we'll try to auto-set slope.
 const slopeSlider = document.getElementById('slope-slider');
 const slopeValueDisp = document.getElementById('slope-value');
 const massSlider = document.getElementById('mass-slider');
-
 const massValueDisp = document.getElementById('mass-value');
+
+const frictionName = document.querySelector('.friction .force-name');
 
 // Helpers
 function updateStatus(text) {
     if (statusText) statusText.innerText = text;
 }
+
 function toggleIndicator(active) {
-    if (indicator) {
-        if (active) indicator.classList.add('active');
-        else indicator.classList.remove('active');
-    }
+    if (!indicator) return;
+    if (active) indicator.classList.add('active');
+    else indicator.classList.remove('active');
 }
 
 // State
 let isRunning = false;
-let objectPos = { x: 0, y: 0, angle: 0, detected: false };
 let lastFrameTime = 0;
+
 let physics = {
-    mass: 2.0, // kg
+    mass: 2.0,
     gravity: 9.81,
     detectedSlope: 0, // degrees
-    mu: 0.6 // coefficient of friction (rubber/wood)
+    mu: 0.6
 };
 
 let showMgComponents = true;
 
-const PIXELS_PER_NEWTON = 2; // Scale for FBD
+const trackState = {
+    yellow: { x: 0, y: 0, angle: 0, detected: false, area: 0 },
+    red: { x: 0, y: 0, angle: 0, detected: false, area: 0 }
+};
 
-// Calibration (Target Yellow)
-let targetColor = { r: 255, g: 215, b: 0 }; // Gold/Yellow
-let colorThreshold = 80;
+// Tracking constants
+const TRACK_STRIDE = 8;
+const MIN_DETECTION_PIXELS = 90;
+
+// Calibration (Yellow is primary object)
+let yellowTargetColor = { r: 255, g: 215, b: 0 };
+let yellowThreshold = 80;
+const redTargetColor = { r: 230, g: 65, b: 55 };
+const redThreshold = 95;
 
 // --- Camera Setup ---
 async function startCamera() {
@@ -62,6 +69,7 @@ async function startCamera() {
         const stream = await navigator.mediaDevices.getUserMedia({
             video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'environment' }
         });
+
         video.srcObject = stream;
         video.onloadedmetadata = () => {
             canvas.width = video.videoWidth;
@@ -78,50 +86,41 @@ async function startCamera() {
     }
 }
 
+// --- Math Helpers ---
+function shortestAngleDiff(a, b) {
+    let d = a - b;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    return d;
+}
+
+function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+}
+
 // --- Physics Logic ---
 function updatePhysics() {
     physics.mass = parseFloat(massSlider.value);
+    massValueDisp.innerText = physics.mass.toFixed(1) + " kg";
 
-    // Smooth angle (Low pass filter)
-    const rawAngle = objectPos.angle; // in radians
-
-    // We assume the object is sitting on a surface. 
-    // If the object rotates, the surface rotates.
-    // Angle is usually between -PI/2 and PI/2.
-    // Convert to degrees for display
+    const rawAngle = trackState.yellow.angle;
     let deg = rawAngle * (180 / Math.PI);
 
-    // Clamp/Deadzone for stability
     if (Math.abs(deg) < 2) deg = 0;
-
-    // Update local physics state
     physics.detectedSlope = deg;
 
-    // Forces
     const theta = (physics.detectedSlope * Math.PI) / 180;
-
-    const weight = physics.mass * physics.gravity; // mg
-    const normal = weight * Math.cos(theta); // mg cos(theta)
-    const gravityParallel = weight * Math.sin(theta); // mg sin(theta)
-
-    // Friction Calculation
-    // Requirement: "show friction forces acting to stop it from sliding"
-    // This implies Static Friction holds the object in place until it slips.
-    // Static friction matches the parallel component of gravity exactly, up to a max limit.
+    const weight = physics.mass * physics.gravity;
+    const normal = Math.max(0, weight * Math.cos(theta));
+    const gravityParallel = weight * Math.sin(theta);
     const maxStaticFriction = physics.mu * normal;
 
     let friction = 0;
     let isSliding = false;
 
-    // Direction of friction opposes gravityParallel
-    // If gravity pulls down (positive theta -> positive gravityParallel), friction is negative.
-    // Magnitude matching:
     if (Math.abs(gravityParallel) <= maxStaticFriction) {
-        // Not sliding, friction balances gravity
         friction = gravityParallel;
-        isSliding = false;
     } else {
-        // Sliding, friction is kinetic (approx equal to max static for this demo)
         friction = maxStaticFriction * Math.sign(gravityParallel);
         isSliding = true;
     }
@@ -129,302 +128,449 @@ function updatePhysics() {
     return {
         W: weight,
         N: normal,
-        f: friction, // Magnitude acts up the slope
+        f: friction,
         theta: theta,
         sliding: isSliding
     };
 }
 
-// --- Computer Vision: Blob & Orientation Tracking ---
-function trackObject() {
-    if (!ctx || !video) return 0;
+// --- Computer Vision: Dual Color Tracking ---
+function colorDistanceSq(r, g, b, target) {
+    return (
+        (r - target.r) * (r - target.r) +
+        (g - target.g) * (g - target.g) +
+        (b - target.b) * (b - target.b)
+    );
+}
+
+function initMoments() {
+    return { m00: 0, m10: 0, m01: 0, m11: 0, m20: 0, m02: 0 };
+}
+
+function accumulateMoments(m, x, y) {
+    m.m00++;
+    m.m10 += x;
+    m.m01 += y;
+    m.m11 += x * y;
+    m.m20 += x * x;
+    m.m02 += y * y;
+}
+
+function finalizeTrack(moments, track) {
+    if (moments.m00 <= MIN_DETECTION_PIXELS) {
+        track.detected = false;
+        track.area = 0;
+        return;
+    }
+
+    const xc = moments.m10 / moments.m00;
+    const yc = moments.m01 / moments.m00;
+
+    const mu20 = moments.m20 / moments.m00 - xc * xc;
+    const mu02 = moments.m02 / moments.m00 - yc * yc;
+    const mu11 = moments.m11 / moments.m00 - xc * yc;
+    const angle = 0.5 * Math.atan2(2 * mu11, mu20 - mu02);
+
+    const alpha = 0.16;
+    track.x = xc;
+    track.y = yc;
+    track.angle = track.angle * (1 - alpha) + angle * alpha;
+    track.detected = true;
+    track.area = moments.m00;
+}
+
+function trackObjects() {
+    if (!ctx || !video) return { yellowPixels: 0, redPixels: 0 };
 
     const w = canvas.width;
     const h = canvas.height;
 
-    // Draw current video frame to canvas
     ctx.drawImage(video, 0, 0, w, h);
-
-    // Get pixels
     const frame = ctx.getImageData(0, 0, w, h);
     const data = frame.data;
-    const length = data.length;
 
-    // Moments calculation
-    let m00 = 0; // count
-    let m10 = 0; // sum x
-    let m01 = 0; // sum y
-    let m11 = 0; // sum xy
-    let m20 = 0; // sum x^2
-    let m02 = 0; // sum y^2
+    const yellowMoments = initMoments();
+    const redMoments = initMoments();
 
-    const stride = 8; // Performance optimization
+    const yellowThresholdSq = yellowThreshold * yellowThreshold;
+    const redThresholdSq = redThreshold * redThreshold;
 
-    for (let i = 0; i < length; i += 4 * stride) {
+    for (let i = 0; i < data.length; i += 4 * TRACK_STRIDE) {
         const r = data[i];
         const g = data[i + 1];
         const b = data[i + 2];
 
-        // Color distance
-        const dist = Math.sqrt(
-            (r - targetColor.r) ** 2 +
-            (g - targetColor.g) ** 2 +
-            (b - targetColor.b) ** 2
-        );
+        const dYellow = colorDistanceSq(r, g, b, yellowTargetColor);
+        const dRed = colorDistanceSq(r, g, b, redTargetColor);
 
-        if (dist < colorThreshold) {
-            const index = i / 4;
-            const x = index % w;
-            const y = Math.floor(index / w);
+        const isYellow = dYellow < yellowThresholdSq;
+        const isRed = dRed < redThresholdSq;
 
-            m00++;
-            m10 += x;
-            m01 += y;
-            m11 += x * y;
-            m20 += x * x;
-            m02 += y * y;
+        if (!isYellow && !isRed) continue;
+
+        const index = i / 4;
+        const x = index % w;
+        const y = Math.floor(index / w);
+
+        if (isYellow && (!isRed || dYellow <= dRed)) {
+            accumulateMoments(yellowMoments, x, y);
+        } else if (isRed) {
+            accumulateMoments(redMoments, x, y);
         }
     }
 
-    let detected = false;
-    let angle = 0;
+    finalizeTrack(yellowMoments, trackState.yellow);
+    finalizeTrack(redMoments, trackState.red);
 
-    if (m00 > 100) { // Detection threshold
-        detected = true;
-        const xc = m10 / m00;
-        const yc = m01 / m00;
+    return {
+        yellowPixels: yellowMoments.m00,
+        redPixels: redMoments.m00
+    };
+}
 
-        // Central moments
-        const mu20 = m20 / m00 - xc * xc;
-        const mu02 = m02 / m00 - yc * yc;
-        const mu11 = m11 / m00 - xc * yc;
+// --- Interaction Logic ---
+function computeBlockInteraction(forces) {
+    const yellow = trackState.yellow;
+    const red = trackState.red;
 
-        // Orientation angle
-        // 0.5 * atan2(2*mu11, mu20 - mu02)
-        // This gives angle of major axis relative to horizontal
-        angle = 0.5 * Math.atan2(2 * mu11, mu20 - mu02);
-
-        objectPos.x = xc;
-        objectPos.y = yc;
+    if (!yellow.detected || !red.detected) {
+        return {
+            bothDetected: false,
+            active: false,
+            touching: false,
+            mode: 'none',
+            normal: { x: 0, y: 0 },
+            magnitude: 0,
+            angleDiff: 0,
+            distance: 0
+        };
     }
 
-    objectPos.detected = detected;
+    const dx = red.x - yellow.x;
+    const dy = red.y - yellow.y;
+    const distance = Math.hypot(dx, dy) || 1;
 
-    // Smooth angle update (simple lerp)
-    if (detected) {
-        // Handle wrap around if needed, though for standard slopes it's fine.
-        // We might want to limit angle if it jumps too much.
-        const alpha = 0.1;
-        objectPos.angle = objectPos.angle * (1 - alpha) + angle * alpha;
+    let mode = 'angled';
+    let normal = { x: dx / distance, y: dy / distance };
+
+    if (Math.abs(dy) > Math.abs(dx) * 1.25) {
+        mode = 'stacked';
+        normal = { x: 0, y: Math.sign(dy) || 1 };
+    } else if (Math.abs(dx) > Math.abs(dy) * 1.25) {
+        mode = 'side';
+        normal = { x: Math.sign(dx) || 1, y: 0 };
+    }
+
+    const angleDiff = Math.abs(shortestAngleDiff(red.angle, yellow.angle));
+    const surfaceAlignment = clamp(Math.cos(angleDiff), 0.2, 1.0);
+    const upperWeight = physics.mass * physics.gravity;
+    const slopeDrive = Math.abs(forces.W * Math.sin(forces.theta));
+
+    let magnitude = 0;
+    if (mode === 'stacked') {
+        magnitude = upperWeight * surfaceAlignment;
+    } else if (mode === 'side') {
+        magnitude = (slopeDrive + Math.abs(forces.f)) * surfaceAlignment;
     } else {
-        // Drift back to 0 if lost? Or stay?
-        // objectPos.angle = 0; 
+        const compressionFromGravity = Math.abs(upperWeight * normal.y);
+        const compressionFromSlope = slopeDrive * Math.abs(normal.x);
+        magnitude = (compressionFromGravity + compressionFromSlope) * surfaceAlignment;
     }
 
-    return m00;
+    const dynamicContactDistance = clamp(
+        (Math.sqrt(Math.max(1, yellow.area)) + Math.sqrt(Math.max(1, red.area))) * 3.2,
+        110,
+        230
+    );
+
+    const touching = distance <= dynamicContactDistance;
+    if (!touching) magnitude = 0;
+
+    return {
+        bothDetected: true,
+        active: touching,
+        touching: touching,
+        mode: mode,
+        normal: normal,
+        magnitude: magnitude,
+        angleDiff: angleDiff,
+        distance: distance
+    };
 }
 
 // --- Visualization Helpers ---
 function drawArrow(context, fromX, fromY, vecX, vecY, color, label, isDashed = false) {
     const toX = fromX + vecX;
     const toY = fromY + vecY;
-
     const headLen = 12;
     const angle = Math.atan2(vecY, vecX);
 
     context.strokeStyle = color;
+    context.fillStyle = color;
     context.lineWidth = 4;
     context.lineCap = "round";
 
     context.beginPath();
-    if (isDashed) {
-        context.setLineDash([5, 5]);
-    } else {
-        context.setLineDash([]);
-    }
+    context.setLineDash(isDashed ? [5, 5] : []);
     context.moveTo(fromX, fromY);
     context.lineTo(toX, toY);
     context.stroke();
-    context.setLineDash([]); // Reset
+    context.setLineDash([]);
 
-    // Head
     context.beginPath();
     context.moveTo(toX, toY);
     context.lineTo(toX - headLen * Math.cos(angle - Math.PI / 6), toY - headLen * Math.sin(angle - Math.PI / 6));
     context.lineTo(toX - headLen * Math.cos(angle + Math.PI / 6), toY - headLen * Math.sin(angle + Math.PI / 6));
-    context.lineTo(toX, toY);
-    context.fillStyle = color;
+    context.closePath();
     context.fill();
 
-    // Label
     if (label) {
         context.font = "bold 14px 'Space Grotesk'";
-        context.fillStyle = "#0f172a"; // Dark Slate
-        // Offset label slightly
-        context.fillText(label, toX + (vecX > 0 ? 10 : -30), toY + (vecY > 0 ? 25 : -10));
+        context.fillStyle = "#0f172a";
+        context.fillText(label, toX + (vecX >= 0 ? 10 : -34), toY + (vecY >= 0 ? 20 : -10));
     }
+}
+
+function drawTrackedBlock(track, color, label) {
+    if (!track.detected) return;
+
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.setLineDash([6, 5]);
+    ctx.lineWidth = 2;
+    ctx.translate(track.x, track.y);
+    ctx.rotate(track.angle);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 40, 30, 0, 0, 2 * Math.PI);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    ctx.font = "bold 13px 'Space Grotesk'";
+    ctx.fillText(label, track.x + 16, track.y - 16);
+}
+
+function drawContactGuide(interaction) {
+    if (!interaction.bothDetected) return;
+
+    const y = trackState.yellow;
+    const r = trackState.red;
+
+    ctx.save();
+    ctx.strokeStyle = interaction.active ? "rgba(34,197,94,0.85)" : "rgba(148,163,184,0.8)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(y.x, y.y);
+    ctx.lineTo(r.x, r.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+}
+
+function drawCube(context, x, y, size, color) {
+    context.save();
+    context.fillStyle = color;
+    context.shadowBlur = 12;
+    context.shadowColor = "rgba(15,23,42,0.45)";
+    context.fillRect(x - size / 2, y - size / 2, size, size);
+    context.shadowBlur = 0;
+    context.restore();
+}
+
+function drawWeightVector(context, forces, x, y, label) {
+    context.save();
+    context.translate(x, y);
+    context.rotate(-forces.theta);
+    drawArrow(context, 0, 0, 0, forces.W * 2.2, "#ef4444", label);
+    context.restore();
+}
+
+function setupFBD(forces) {
+    fbdCanvas.width = fbdCanvas.clientWidth;
+    fbdCanvas.height = fbdCanvas.clientHeight;
+
+    const cx = fbdCanvas.width / 2;
+    const cy = fbdCanvas.height / 2;
+
+    fbdCtx.clearRect(0, 0, fbdCanvas.width, fbdCanvas.height);
+    fbdCtx.save();
+    fbdCtx.translate(cx, cy);
+    fbdCtx.scale(1.5, 1.5);
+    fbdCtx.rotate(forces.theta);
+
+    fbdCtx.strokeStyle = "rgba(0,0,0,0.6)";
+    fbdCtx.lineWidth = 4;
+    fbdCtx.beginPath();
+    fbdCtx.moveTo(-155, 25);
+    fbdCtx.lineTo(155, 25);
+    fbdCtx.stroke();
+}
+
+function drawSingleFBD(forces) {
+    setupFBD(forces);
+
+    const cubeSize = 50;
+    drawCube(fbdCtx, 0, 0, cubeSize, "rgba(255, 215, 0, 0.9)");
+
+    const scale = 2.5;
+    drawArrow(fbdCtx, 0, -cubeSize / 2, 0, -forces.N * scale, "#06b6d4", "N");
+    drawWeightVector(fbdCtx, forces, 0, 0, "mg");
+
+    if (showMgComponents) {
+        const wCos = forces.W * Math.cos(forces.theta);
+        const wSin = forces.W * Math.sin(forces.theta);
+        drawArrow(fbdCtx, 0, 0, 0, wCos * scale, "#a855f7", "mg cosθ", true);
+        drawArrow(fbdCtx, 0, 0, wSin * scale, 0, "#ec4899", "mg sinθ", true);
+    }
+
+    if (Math.abs(forces.f) > 0.1) {
+        const dir = (forces.theta > 0) ? -1 : 1;
+        drawArrow(fbdCtx, 0, cubeSize / 2, dir * Math.abs(forces.f) * scale, 0, "#f59e0b", "f");
+    }
+
+    fbdCtx.restore();
+}
+
+function drawMultiBlockFBD(forces, interaction) {
+    setupFBD(forces);
+
+    const cubeSize = 46;
+    const gap = 6;
+
+    const yellowPos = { x: 0, y: 0 };
+    let redPos = { x: interaction.normal.x * (cubeSize + gap), y: interaction.normal.y * (cubeSize + gap) };
+
+    if (interaction.mode === 'stacked') {
+        redPos = { x: 0, y: -cubeSize - gap };
+    } else if (interaction.mode === 'side') {
+        redPos = { x: (interaction.normal.x > 0 ? 1 : -1) * (cubeSize + gap), y: 0 };
+    }
+
+    drawCube(fbdCtx, yellowPos.x, yellowPos.y, cubeSize, "rgba(255, 215, 0, 0.9)");
+    drawCube(fbdCtx, redPos.x, redPos.y, cubeSize, "rgba(239, 68, 68, 0.9)");
+
+    const mainScale = 2.1;
+    drawArrow(fbdCtx, yellowPos.x, yellowPos.y - cubeSize / 2, 0, -forces.N * mainScale, "#06b6d4", "N");
+    drawWeightVector(fbdCtx, forces, yellowPos.x, yellowPos.y, "mg_y");
+    drawWeightVector(fbdCtx, forces, redPos.x, redPos.y, "mg_r");
+
+    const reactionScale = 2.4;
+    const rx = interaction.normal.x * interaction.magnitude * reactionScale;
+    const ry = interaction.normal.y * interaction.magnitude * reactionScale;
+
+    drawArrow(fbdCtx, yellowPos.x, yellowPos.y, -rx, -ry, "#22c55e", "R_y");
+    drawArrow(fbdCtx, redPos.x, redPos.y, rx, ry, "#0ea5e9", "R_r");
+
+    fbdCtx.save();
+    fbdCtx.rotate(-forces.theta);
+    fbdCtx.fillStyle = "#0f172a";
+    fbdCtx.font = "bold 13px 'Space Grotesk'";
+    fbdCtx.fillText(
+        `${interaction.mode} contact | Δθ ${(interaction.angleDiff * 180 / Math.PI).toFixed(1)}°`,
+        -120,
+        -110
+    );
+    fbdCtx.restore();
+
+    fbdCtx.restore();
+}
+
+function drawFBD(forces, interaction) {
+    if (interaction.active) drawMultiBlockFBD(forces, interaction);
+    else drawSingleFBD(forces);
+}
+
+function updateDetectionText(interaction) {
+    const hasYellow = trackState.yellow.detected;
+    const hasRed = trackState.red.detected;
+
+    if (hasYellow && interaction.active) {
+        detectionConf.innerText = `Yellow + Red (${interaction.mode} contact)`;
+        detectionConf.style.color = "#22c55e";
+        return;
+    }
+
+    if (hasYellow && hasRed && !interaction.active) {
+        detectionConf.innerText = "Yellow + Red detected (move blocks closer)";
+        detectionConf.style.color = "#f59e0b";
+        return;
+    }
+
+    if (hasYellow) {
+        detectionConf.innerText = "Tracking Yellow Cube";
+        detectionConf.style.color = "#4ade80";
+        return;
+    }
+
+    if (hasRed) {
+        detectionConf.innerText = "Red cube found (waiting for yellow)";
+        detectionConf.style.color = "#fb7185";
+        return;
+    }
+
+    detectionConf.innerText = "Searching for Yellow...";
+    detectionConf.style.color = "#facc15";
 }
 
 // --- Main Loop ---
 function loop(timestamp) {
     if (!isRunning) return;
 
-    // FPS
     const dt = timestamp - lastFrameTime;
     lastFrameTime = timestamp;
     fpsCounter.innerText = Math.round(1000 / dt) || 60;
 
-    // 1. Vision
-    const pixelCount = trackObject();
-
-    // 2. Physics
+    trackObjects();
     const forces = updatePhysics();
+    const interaction = computeBlockInteraction(forces);
 
-    // 3. UI Updates
-    // Clear Overlay - We only show clean video + maybe bounding box
+    // Overlay above live video
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawTrackedBlock(trackState.yellow, "rgba(255, 215, 0, 0.9)", "Yellow");
+    drawTrackedBlock(trackState.red, "rgba(239, 68, 68, 0.9)", "Red");
+    drawContactGuide(interaction);
 
-    // Show bounding circle only to indicate "Tracking" is working, but no forces
-    if (objectPos.detected) {
-        ctx.strokeStyle = "rgba(255, 215, 0, 0.8)"; // Yellow ring
-        ctx.setLineDash([5, 5]);
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        // Draw ellipse along major axis
-        ctx.save();
-        ctx.translate(objectPos.x, objectPos.y);
-        ctx.rotate(objectPos.angle);
-        ctx.ellipse(0, 0, 40, 30, 0, 0, 2 * Math.PI);
-        ctx.stroke();
-        ctx.restore();
-        ctx.setLineDash([]);
-
-        detectionConf.innerText = "Tracking Yellow Cube";
-        detectionConf.style.color = "#4ade80"; // green
-        detectionConf.innerText = "Searching for Yellow...";
-        detectionConf.style.color = "#facc15"; // yellow
-    }
-
-    // Toggle FBD Display
-    const fbdCanvas = document.getElementById('fbd-canvas');
+    // FBD display remains driven by yellow block (primary object)
     const noObjectMsg = document.getElementById('no-object-message');
     const forcesList = document.querySelector('.forces-list');
 
-    if (objectPos.detected) {
+    if (trackState.yellow.detected) {
         fbdCanvas.style.display = 'block';
         noObjectMsg.style.display = 'none';
-        forcesList.style.display = 'flex'; // Changed from hiding to showing flex container
+        forcesList.style.display = 'flex';
     } else {
         fbdCanvas.style.display = 'none';
         noObjectMsg.style.display = 'flex';
         forcesList.style.display = 'none';
     }
 
-    // Updates
-    slopeSlider.value = physics.detectedSlope.toFixed(1); // update slider to match reality
+    slopeSlider.value = clamp(physics.detectedSlope, -45, 45).toFixed(1);
     slopeValueDisp.innerText = physics.detectedSlope.toFixed(1) + "°";
 
     valNormal.innerText = forces.N.toFixed(1) + " N";
     valWeight.innerText = forces.W.toFixed(1) + " N";
-    valFriction.innerText = Math.abs(forces.f).toFixed(1) + " N";
 
-    // Bars
+    let thirdForceMagnitude = Math.abs(forces.f);
+    if (interaction.active) {
+        frictionName.innerText = "Reaction (R)";
+        thirdForceMagnitude = interaction.magnitude;
+    } else {
+        frictionName.innerText = "Friction (f)";
+    }
+
+    valFriction.innerText = thirdForceMagnitude.toFixed(1) + " N";
+
     const maxVal = 50;
     document.querySelector('.normal .fill').style.width = Math.min(100, (forces.N / maxVal) * 100) + "%";
-    document.querySelector('.friction .fill').style.width = Math.min(100, (Math.abs(forces.f) / maxVal) * 100) + "%";
+    document.querySelector('.friction .fill').style.width = Math.min(100, (thirdForceMagnitude / maxVal) * 100) + "%";
     document.querySelector('.weight .fill').style.width = Math.min(100, (forces.W / maxVal) * 100) + "%";
 
-    // 4. FBD Visualization (Right Panel)
-    drawFBD(forces);
+    if (trackState.yellow.detected) drawFBD(forces, interaction);
+    updateDetectionText(interaction);
 
     requestAnimationFrame(loop);
-}
-
-function drawFBD(forces) {
-    // Canvas setup
-    fbdCanvas.width = fbdCanvas.clientWidth;
-    fbdCanvas.height = fbdCanvas.clientHeight;
-    const cx = fbdCanvas.width / 2;
-    const cy = fbdCanvas.height / 2;
-    const ctx = fbdCtx;
-
-    // Scale for drawing
-    const scale = 2.5;
-
-    // We want to draw the surface tilted by forces.theta
-    // But Force Vectors should be drawn relative to the object/surface logic.
-    // Let's rotate the whole view to match the detected angle
-
-    ctx.save();
-    ctx.translate(cx, cy);
-    ctx.scale(1.5, 1.5); // Enlarge the view
-
-    // Apply Rotation (Visual tilt)
-    // Note: The object rotates in the video. We mimic that here.
-    // If slope > 0 (tilted right/down), theta is positive.
-    ctx.rotate(forces.theta);
-
-    // Draw Surface
-    ctx.strokeStyle = "rgba(0,0,0,0.6)";
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(-150, 25); // moved down slightly
-    ctx.lineTo(150, 25);
-    ctx.stroke();
-
-    // Draw Cube
-    ctx.fillStyle = "rgba(255, 215, 0, 0.9)"; // Yellow
-    ctx.shadowBlur = 15;
-    ctx.shadowColor = "black";
-    ctx.fillRect(-25, -25, 50, 50);
-    ctx.shadowBlur = 0;
-
-    // --- Draw Vectors --- 
-    // Origin is center of square (0,0)
-
-    // Normal Force (Perpendicular to surface, i.e., UP in local rotated frame)
-    // Vector: (0, -N)
-    drawArrow(ctx, 0, -25, 0, -forces.N * scale, "#06b6d4", "N");
-
-    // Weight (Always DOWN in GLOBAL frame)
-    // We will draw it normally, but also its components.
-
-    // 1. Draw Real Weight Vector (slightly transparent to emphasize components)
-    ctx.save();
-    ctx.rotate(-forces.theta);
-
-    // If components are hidden, we show the main Weight vector fully opaque and labeled.
-    // If components are shown, we keep it ghosted (transparent) and unlabeled to reduce clutter.
-    const wColor = showMgComponents ? "rgba(239, 68, 68, 0.5)" : "rgba(239, 68, 68, 1.0)";
-    const wLabel = showMgComponents ? "" : "mg";
-
-    drawArrow(ctx, 0, 0, 0, forces.W * scale, wColor, wLabel);
-    ctx.restore();
-
-    // 2. Weight Components
-    if (showMgComponents) {
-        // mg cos(theta) -> Perpendicular into slope
-        // Direction: (0, 1) in local frame
-        // Magnitude: W * cos(theta) (which is Normal force magnitude roughly)
-        const wCos = forces.W * Math.cos(forces.theta);
-        drawArrow(ctx, 0, 0, 0, wCos * scale, "#a855f7", "mg cosθ", true);
-
-        // mg sin(theta) -> Parallel to slope
-        // Direction: Down the slope.
-        // If theta > 0, pulls +x.
-        const wSin = forces.W * Math.sin(forces.theta);
-        drawArrow(ctx, 0, 0, wSin * scale, 0, "#ec4899", "mg sinθ", true);
-    }
-
-
-    // Friction (Parallel to surface)
-    // Direction: Opposes sliding tendency.
-    if (Math.abs(forces.f) > 0.1) {
-        let dir = (forces.theta > 0) ? -1 : 1;
-        drawArrow(ctx, 0, 25, dir * Math.abs(forces.f) * scale, 0, "#f59e0b", "f");
-    }
-
-    ctx.restore();
 }
 
 // Events
@@ -435,7 +581,6 @@ document.getElementById('toggle-camera').addEventListener('click', () => {
 document.getElementById('calibrate-btn').addEventListener('click', () => {
     if (!isRunning) return;
 
-    // Calibrate simplified center color
     const cx = Math.floor(video.videoWidth / 2);
     const cy = Math.floor(video.videoHeight / 2);
 
@@ -446,15 +591,12 @@ document.getElementById('calibrate-btn').addEventListener('click', () => {
     tCtx.drawImage(video, 0, 0, tCanvas.width, tCanvas.height);
 
     const p = tCtx.getImageData(cx, cy, 1, 1).data;
-    targetColor = { r: p[0], g: p[1], b: p[2] };
-    updateStatus(`Observed: ${p[0]}, ${p[1]}, ${p[2]}`);
-
-    // Reset to active after short delay
-    setTimeout(() => { updateStatus("Tracking Active"); }, 1500);
+    yellowTargetColor = { r: p[0], g: p[1], b: p[2] };
+    updateStatus(`Yellow target: ${p[0]}, ${p[1]}, ${p[2]}`);
+    setTimeout(() => updateStatus("Tracking Active"), 1500);
 });
 
 document.getElementById('export-btn').addEventListener('click', () => {
-    // Determine current angle
     const angle = physics.detectedSlope.toFixed(0);
     const link = document.createElement('a');
     link.download = `FBD_Angle_${angle}.png`;
@@ -464,13 +606,8 @@ document.getElementById('export-btn').addEventListener('click', () => {
 
 document.getElementById('toggle-mg-btn').addEventListener('click', () => {
     showMgComponents = !showMgComponents;
-    // Optional: Visual feedback on button (e.g., opacity or border)
     const btn = document.getElementById('toggle-mg-btn');
-    if (showMgComponents) {
-        btn.style.opacity = "1";
-    } else {
-        btn.style.opacity = "0.5";
-    }
+    btn.style.opacity = showMgComponents ? "1" : "0.5";
 });
 
 const settingsBtn = document.getElementById('settings-btn');
@@ -479,10 +616,9 @@ const controlsSection = document.querySelector('.controls-section');
 settingsBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     controlsSection.classList.toggle('active');
-    settingsBtn.classList.toggle('active'); // Optional: style active state of button
+    settingsBtn.classList.toggle('active');
 });
 
-// Close when clicking outside
 document.addEventListener('click', (e) => {
     if (!controlsSection.contains(e.target) && !settingsBtn.contains(e.target)) {
         controlsSection.classList.remove('active');
