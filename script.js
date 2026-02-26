@@ -24,6 +24,11 @@ const massValueDisp = document.getElementById('mass-value');
 const frictionSlider = document.getElementById('friction-slider');
 const frictionValueDisp = document.getElementById('friction-value');
 
+const mass2Slider = document.getElementById('mass2-slider');
+const mass2ValueDisp = document.getElementById('mass2-value');
+const friction2Slider = document.getElementById('friction2-slider');
+const friction2ValueDisp = document.getElementById('friction2-value');
+
 const frictionName = document.querySelector('.friction .force-name');
 
 // Helpers
@@ -43,9 +48,11 @@ let lastFrameTime = 0;
 
 let physics = {
     mass: 2.0,
+    mu: 0.6,
+    mass2: 2.0,
+    mu2: 0.6,
     gravity: 9.81,
     detectedSlope: 0, // degrees
-    mu: 0.6
 };
 
 let showMgComponents = true;
@@ -64,8 +71,8 @@ const MIN_DETECTION_PIXELS = 90;
 // Calibration (Yellow is primary object)
 let yellowTargetColor = { r: 255, g: 215, b: 0 };
 let yellowThreshold = 80;
-const redTargetColor = { r: 230, g: 65, b: 55 };
-const redThreshold = 95;
+let redTargetColor = { r: 139, g: 0, b: 0 };
+let redThreshold = 95;
 
 // --- Camera Setup ---
 async function startCamera() {
@@ -110,6 +117,12 @@ function updatePhysics() {
     physics.mu = parseFloat(frictionSlider.value);
     frictionValueDisp.innerText = physics.mu.toFixed(2);
 
+    physics.mass2 = parseFloat(mass2Slider.value);
+    if (mass2ValueDisp) mass2ValueDisp.innerText = physics.mass2.toFixed(1) + " kg";
+
+    physics.mu2 = parseFloat(friction2Slider.value);
+    if (friction2ValueDisp) friction2ValueDisp.innerText = physics.mu2.toFixed(2);
+
     // Determine primary block for angle stability
     if (!trackState.primary) {
         if (trackState.yellow.detected) trackState.primary = 'yellow';
@@ -135,11 +148,14 @@ function updatePhysics() {
     if (Math.abs(deg) < 2) deg = 0;
     physics.detectedSlope = deg;
 
+    let activeMass = trackState.primary === 'red' ? physics.mass2 : physics.mass;
+    let activeMu = trackState.primary === 'red' ? physics.mu2 : physics.mu;
+
     const theta = (physics.detectedSlope * Math.PI) / 180;
-    const weight = physics.mass * physics.gravity;
+    const weight = activeMass * physics.gravity;
     const normal = Math.max(0, weight * Math.cos(theta));
     const gravityParallel = weight * Math.sin(theta);
-    const maxStaticFriction = physics.mu * normal;
+    const maxStaticFriction = activeMu * normal;
 
     let friction = 0;
     let isSliding = false;
@@ -290,7 +306,7 @@ function computeBlockInteraction(forces) {
 
     const angleDiff = Math.abs(shortestAngleDiff(red.angle, yellow.angle));
     const surfaceAlignment = clamp(Math.cos(angleDiff), 0.2, 1.0);
-    const upperWeight = physics.mass * physics.gravity;
+    const upperWeight = physics.mass2 * physics.gravity; // Red's weight pressing down
     const slopeDrive = Math.abs(forces.W * Math.sin(forces.theta));
 
     let magnitude = 0;
@@ -299,18 +315,18 @@ function computeBlockInteraction(forces) {
         // Red is stacked on Yellow (or vice versa depending on sign, but interaction is normal to slope)
         // Normal force between them is weight component perpendicular to slope
         magnitude = upperWeight * Math.cos(forces.theta) * surfaceAlignment;
-        // Friction between blocks opposes sliding down the slope
-        frictionMagnitude = physics.mu * magnitude;
+        // Friction between blocks opposes sliding down the slope (using yellow's surface mu or red's?) Use red's as it's the upper.
+        frictionMagnitude = physics.mu2 * magnitude;
     } else if (mode === 'side') {
         // Blocks are side-by-side on the slope
         magnitude = (slopeDrive + Math.abs(forces.f)) * surfaceAlignment;
         // Friction between them is minimal unless they are moving relative to each other vertically
-        frictionMagnitude = physics.mu * magnitude * 0.1; // Reduced for side contact
+        frictionMagnitude = physics.mu2 * magnitude * 0.1; // Reduced for side contact
     } else {
         const compressionFromGravity = Math.abs(upperWeight * normal.y);
-        const compressionFromSlope = slopeDrive * Math.abs(normal.x);
+        const compressionFromSlope = Math.abs(physics.mass2 * physics.gravity * Math.sin(forces.theta)) * Math.abs(normal.x);
         magnitude = (compressionFromGravity + compressionFromSlope) * surfaceAlignment;
-        frictionMagnitude = physics.mu * magnitude;
+        frictionMagnitude = physics.mu2 * magnitude;
     }
 
     const dynamicContactDistance = clamp(
@@ -465,8 +481,8 @@ function setupFBD(forces) {
 function drawSingleFBD(forces) {
     setupFBD(forces);
 
-    const cubeSize = 50;
-    drawCube(fbdCtx, 0, 0, cubeSize, "rgba(255, 215, 0, 0.9)");
+    let primaryColor = trackState.primary === 'red' ? "rgba(139, 0, 0, 0.9)" : "rgba(255, 215, 0, 0.9)";
+    drawCube(fbdCtx, 0, 0, cubeSize, primaryColor);
 
     // Draw angle theta arc at the base
     drawAngleArc(fbdCtx, -130, 25, 40, forces.theta, "#64748b");
@@ -496,8 +512,17 @@ function drawMultiBlockFBD(forces, interaction) {
     const cubeSize = 50;
     const gap = 6;
 
-    // Draw main Yellow body
-    drawCube(fbdCtx, 0, 0, cubeSize, "rgba(255, 215, 0, 0.9)");
+    // Draw main body based on primary tracked block
+    let primaryColor = "rgba(255, 215, 0, 0.9)"; // Yellow default
+    let secondaryColor = "rgba(139, 0, 0, 0.9)"; // Dark Red default
+
+    // Swap appearance if Red is the primary tracked block
+    if (trackState.primary === 'red') {
+        primaryColor = "rgba(139, 0, 0, 0.9)";
+        secondaryColor = "rgba(255, 215, 0, 0.9)";
+    }
+
+    drawCube(fbdCtx, 0, 0, cubeSize, primaryColor);
 
     // Draw Red block as a ghostly outline to show context
     let redPos = { x: 0, y: 0 };
@@ -512,7 +537,7 @@ function drawMultiBlockFBD(forces, interaction) {
 
     fbdCtx.save();
     fbdCtx.globalAlpha = 0.4;
-    drawCube(fbdCtx, redPos.x, redPos.y, cubeSize, "rgba(239, 68, 68, 1)");
+    drawCube(fbdCtx, redPos.x, redPos.y, cubeSize, secondaryColor);
     fbdCtx.restore();
 
     drawAngleArc(fbdCtx, -135, 25, 35, forces.theta, "#64748b");
@@ -532,7 +557,7 @@ function drawMultiBlockFBD(forces, interaction) {
         }
     } else if (interaction.mode === 'side') {
         const sign = interaction.normal.x > 0 ? 1 : -1;
-        drawArrow(fbdCtx, sign * cubeSize / 2, 0, -sign * interaction.magnitude * scale, 0, "#ef4444", "R_red");
+        drawArrow(fbdCtx, sign * cubeSize / 2, 0, -sign * interaction.magnitude * scale, 0, "#ef4444", "R_sub");
     }
 
     // Ground friction
@@ -565,8 +590,8 @@ function drawResultantFBD(forces, interaction) {
     fbdCtx.save();
     fbdCtx.translate(cx, cy);
 
-    const cubeSize = 50;
-    drawCube(fbdCtx, 0, 0, cubeSize, "rgba(255, 215, 0, 0.9)");
+    let primaryColor = trackState.primary === 'red' ? "rgba(139, 0, 0, 0.9)" : "rgba(255, 215, 0, 0.9)";
+    drawCube(fbdCtx, 0, 0, cubeSize, primaryColor);
 
     // Compute Force Components in standard Math coordinates 
     let Wx = 0;
@@ -716,7 +741,7 @@ function loop(timestamp) {
     // Overlay above live video
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     drawTrackedBlock(trackState.yellow, "rgba(255, 215, 0, 0.9)", "Yellow");
-    drawTrackedBlock(trackState.red, "rgba(239, 68, 68, 0.9)", "Red");
+    drawTrackedBlock(trackState.red, "rgba(139, 0, 0, 0.9)", "Red");
     drawContactGuide(interaction);
 
     // FBD display driven by either block
