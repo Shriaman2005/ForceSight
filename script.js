@@ -21,6 +21,8 @@ const slopeSlider = document.getElementById('slope-slider');
 const slopeValueDisp = document.getElementById('slope-value');
 const massSlider = document.getElementById('mass-slider');
 const massValueDisp = document.getElementById('mass-value');
+const frictionSlider = document.getElementById('friction-slider');
+const frictionValueDisp = document.getElementById('friction-value');
 
 const frictionName = document.querySelector('.friction .force-name');
 
@@ -102,6 +104,9 @@ function clamp(value, min, max) {
 function updatePhysics() {
     physics.mass = parseFloat(massSlider.value);
     massValueDisp.innerText = physics.mass.toFixed(1) + " kg";
+
+    physics.mu = parseFloat(frictionSlider.value);
+    frictionValueDisp.innerText = physics.mu.toFixed(2);
 
     const rawAngle = trackState.yellow.angle;
     let deg = rawAngle * (180 / Math.PI);
@@ -267,14 +272,18 @@ function computeBlockInteraction(forces) {
     const slopeDrive = Math.abs(forces.W * Math.sin(forces.theta));
 
     let magnitude = 0;
+    let frictionMagnitude = 0;
     if (mode === 'stacked') {
         magnitude = upperWeight * surfaceAlignment;
+        frictionMagnitude = physics.mu * magnitude;
     } else if (mode === 'side') {
         magnitude = (slopeDrive + Math.abs(forces.f)) * surfaceAlignment;
+        frictionMagnitude = physics.mu * magnitude;
     } else {
         const compressionFromGravity = Math.abs(upperWeight * normal.y);
         const compressionFromSlope = slopeDrive * Math.abs(normal.x);
         magnitude = (compressionFromGravity + compressionFromSlope) * surfaceAlignment;
+        frictionMagnitude = physics.mu * magnitude;
     }
 
     const dynamicContactDistance = clamp(
@@ -293,6 +302,7 @@ function computeBlockInteraction(forces) {
         mode: mode,
         normal: normal,
         magnitude: magnitude,
+        frictionMagnitude: frictionMagnitude,
         angleDiff: angleDiff,
         distance: distance
     };
@@ -379,6 +389,23 @@ function drawCube(context, x, y, size, color) {
     context.restore();
 }
 
+function drawAngleArc(context, x, y, radius, angle, color) {
+    context.save();
+    context.strokeStyle = color;
+    context.lineWidth = 2;
+    context.beginPath();
+    // Arc from horizontal base (0) to -angle (since positive angle is slope down)
+    context.arc(x, y, radius, 0, -angle, angle > 0);
+    context.stroke();
+
+    context.fillStyle = color;
+    context.font = "bold 12px 'Space Grotesk'";
+    const labelX = x + (radius + 15) * Math.cos(-angle / 2);
+    const labelY = y + (radius + 15) * Math.sin(-angle / 2);
+    context.fillText("θ", labelX, labelY);
+    context.restore();
+}
+
 function drawWeightVector(context, forces, x, y, label) {
     context.save();
     context.translate(x, y);
@@ -413,6 +440,9 @@ function drawSingleFBD(forces) {
 
     const cubeSize = 50;
     drawCube(fbdCtx, 0, 0, cubeSize, "rgba(255, 215, 0, 0.9)");
+
+    // Draw angle theta arc at the base
+    drawAngleArc(fbdCtx, -130, 25, 40, forces.theta, "#64748b");
 
     const scale = 2.5;
     drawArrow(fbdCtx, 0, -cubeSize / 2, 0, -forces.N * scale, "#06b6d4", "N");
@@ -451,6 +481,9 @@ function drawMultiBlockFBD(forces, interaction) {
     drawCube(fbdCtx, yellowPos.x, yellowPos.y, cubeSize, "rgba(255, 215, 0, 0.9)");
     drawCube(fbdCtx, redPos.x, redPos.y, cubeSize, "rgba(239, 68, 68, 0.9)");
 
+    // Draw angle theta arc
+    drawAngleArc(fbdCtx, -135, 25, 35, forces.theta, "#64748b");
+
     const mainScale = 2.1;
     drawArrow(fbdCtx, yellowPos.x, yellowPos.y - cubeSize / 2, 0, -forces.N * mainScale, "#06b6d4", "N");
     drawWeightVector(fbdCtx, forces, yellowPos.x, yellowPos.y, "mg_y");
@@ -462,6 +495,14 @@ function drawMultiBlockFBD(forces, interaction) {
 
     drawArrow(fbdCtx, yellowPos.x, yellowPos.y, -rx, -ry, "#22c55e", "R_y");
     drawArrow(fbdCtx, redPos.x, redPos.y, rx, ry, "#0ea5e9", "R_r");
+
+    // Add inter-block friction (opposing relative motion)
+    if (interaction.frictionMagnitude > 0.5) {
+        const fScale = 2.0;
+        // Simplified direction: opposing slope component of red block
+        const fDir = (forces.theta > 0) ? -1 : 1;
+        drawArrow(fbdCtx, redPos.x, redPos.y + cubeSize / 2, fDir * interaction.frictionMagnitude * fScale, 0, "#f59e0b", "f_inter");
+    }
 
     fbdCtx.save();
     fbdCtx.rotate(-forces.theta);
