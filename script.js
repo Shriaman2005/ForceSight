@@ -108,9 +108,14 @@ function updatePhysics() {
     physics.mu = parseFloat(frictionSlider.value);
     frictionValueDisp.innerText = physics.mu.toFixed(2);
 
-    const rawAngle = trackState.yellow.angle;
-    let deg = rawAngle * (180 / Math.PI);
+    let rawAngle = 0;
+    if (trackState.yellow.detected) {
+        rawAngle = trackState.yellow.angle;
+    } else if (trackState.red.detected) {
+        rawAngle = trackState.red.angle;
+    }
 
+    let deg = rawAngle * (180 / Math.PI);
     if (Math.abs(deg) < 2) deg = 0;
     physics.detectedSlope = deg;
 
@@ -573,11 +578,13 @@ function loop(timestamp) {
     drawTrackedBlock(trackState.red, "rgba(239, 68, 68, 0.9)", "Red");
     drawContactGuide(interaction);
 
-    // FBD display remains driven by yellow block (primary object)
+    // FBD display driven by either block
     const noObjectMsg = document.getElementById('no-object-message');
     const forcesList = document.querySelector('.forces-list');
 
-    if (trackState.yellow.detected) {
+    const anyBlockDetected = trackState.yellow.detected || trackState.red.detected;
+
+    if (anyBlockDetected) {
         fbdCanvas.style.display = 'block';
         noObjectMsg.style.display = 'none';
         forcesList.style.display = 'flex';
@@ -608,7 +615,7 @@ function loop(timestamp) {
     document.querySelector('.friction .fill').style.width = Math.min(100, (thirdForceMagnitude / maxVal) * 100) + "%";
     document.querySelector('.weight .fill').style.width = Math.min(100, (forces.W / maxVal) * 100) + "%";
 
-    if (trackState.yellow.detected) drawFBD(forces, interaction);
+    if (anyBlockDetected) drawFBD(forces, interaction);
     updateDetectionText(interaction);
 
     requestAnimationFrame(loop);
