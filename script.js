@@ -56,10 +56,12 @@ let physics = {
 };
 
 let showMgComponents = true;
+let isMultiBodyMode = false;
 
 const trackState = {
     yellow: { x: 0, y: 0, angle: 0, detected: false, area: 0 },
-    red: { x: 0, y: 0, angle: 0, detected: false, area: 0 }
+    red: { x: 0, y: 0, angle: 0, detected: false, area: 0 },
+    primary: 'red'
 };
 
 // Tracking constants
@@ -223,7 +225,7 @@ function trackObjects() {
         const dYellow = colorDistanceSq(r, g, b, yellowTargetColor);
         const dRed = colorDistanceSq(r, g, b, redTargetColor);
 
-        const isYellow = dYellow < yellowThresholdSq;
+        const isYellow = isMultiBodyMode && (dYellow < yellowThresholdSq);
         const isRed = dRed < redThresholdSq;
 
         if (!isYellow && !isRed) continue;
@@ -453,8 +455,8 @@ function setupFBD(forces) {
 function drawSingleFBD(forces) {
     setupFBD(forces);
 
-    let primaryColor = trackState.primary === 'red' ? "rgba(139, 0, 0, 0.9)" : "rgba(255, 215, 0, 0.9)";
-    drawCube(fbdCtx, 0, 0, cubeSize, primaryColor);
+    let primaryColor = trackState.primary === 'red' ? "rgba(227, 3, 3, 0.9)" : "rgba(255, 215, 0, 0.9)";
+    drawCube(fbdCtx, 0, 0, 46, primaryColor);
 
     // Draw angle theta arc at the base
     drawAngleArc(fbdCtx, -130, 25, 40, forces.theta, "#64748b");
@@ -542,32 +544,38 @@ function updateDetectionText(interaction) {
     const hasYellow = trackState.yellow.detected;
     const hasRed = trackState.red.detected;
 
-    if (hasYellow && interaction.active) {
-        detectionConf.innerText = `Yellow + Red (${interaction.mode} contact)`;
-        detectionConf.style.color = "#22c55e";
-        return;
-    }
-
-    if (hasYellow && hasRed && !interaction.active) {
-        detectionConf.innerText = "Yellow + Red detected (move blocks closer)";
-        detectionConf.style.color = "#f59e0b";
-        return;
-    }
-
-    if (hasYellow) {
-        detectionConf.innerText = "Tracking Yellow Cube";
-        detectionConf.style.color = "#4ade80";
-        return;
-    }
-
-    if (hasRed) {
-        detectionConf.innerText = "Red cube found (waiting for yellow)";
+    if (isMultiBodyMode) {
+        if (hasYellow && interaction.active) {
+            detectionConf.innerText = `Yellow + Red (${interaction.mode} contact)`;
+            detectionConf.style.color = "#22c55e";
+            return;
+        }
+        if (hasYellow && hasRed && !interaction.active) {
+            detectionConf.innerText = "Yellow + Red detected (move blocks closer)";
+            detectionConf.style.color = "#f59e0b";
+            return;
+        }
+        if (hasRed && !hasYellow) {
+            detectionConf.innerText = "Red cube found (waiting for yellow)";
+            detectionConf.style.color = "#fb7185";
+            return;
+        }
+        if (hasYellow && !hasRed) {
+            detectionConf.innerText = "Yellow cube found (waiting for red)";
+            detectionConf.style.color = "#4ade80";
+            return;
+        }
+        detectionConf.innerText = "Searching for Blocks...";
+        detectionConf.style.color = "#facc15";
+    } else {
+        if (hasRed) {
+            detectionConf.innerText = "Tracking Red Cube";
+            detectionConf.style.color = "#ef4444";
+            return;
+        }
+        detectionConf.innerText = "Searching for Red Block...";
         detectionConf.style.color = "#fb7185";
-        return;
     }
-
-    detectionConf.innerText = "Searching for Yellow...";
-    detectionConf.style.color = "#facc15";
 }
 
 // --- Main Loop ---
@@ -666,6 +674,15 @@ document.getElementById('toggle-mg-btn').addEventListener('click', () => {
     showMgComponents = !showMgComponents;
     const btn = document.getElementById('toggle-mg-btn');
     btn.style.opacity = showMgComponents ? "1" : "0.5";
+});
+
+const modeToggle = document.getElementById('mode-toggle');
+modeToggle.addEventListener('change', (e) => {
+    isMultiBodyMode = e.target.checked;
+    if (!isMultiBodyMode) {
+        trackState.yellow.detected = false;
+        trackState.yellow.area = 0;
+    }
 });
 
 const settingsBtn = document.getElementById('settings-btn');
