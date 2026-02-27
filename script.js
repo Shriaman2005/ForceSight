@@ -494,7 +494,7 @@ function drawMultiBlockFBD(forces, interaction) {
     }
 
     drawCube(fbdCtx, yellowPos.x, yellowPos.y, cubeSize, "rgba(255, 215, 0, 0.9)");
-    drawCube(fbdCtx, redPos.x, redPos.y, cubeSize, "rgba(239, 68, 68, 0.9)");
+    drawCube(fbdCtx, redPos.x, redPos.y, cubeSize, "rgba(139, 0, 0, 0.9)");
 
     // Draw angle theta arc
     drawAngleArc(fbdCtx, -135, 25, 35, forces.theta, "#64748b");
